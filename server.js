@@ -26,6 +26,85 @@ app.use(express.static(__dirname));
 
 const ROLES = ["admin", "comercial", "operacional"];
 
+// Checklists padrão da Integração do Cliente -- trazidos 1:1 do board do Trello (cards reais,
+// checklists "VALIDAÇÃO INICIAL", "ADMINISTRATIVO (Bruna)", "OPERAÇÃO – PARAMETRIZAÇÃO (Fiscal/DP)"
+// e "INTEGRAÇÃO"). Servem de seed na primeira vez que o servidor sobe; depois disso o admin pode
+// editar tudo pela tela "Checklists de integração" no CRM, sem precisar mexer em código.
+const DEFAULT_ONBOARD_CHECKLISTS = {
+  "1. Venda Ganha": {
+    titulo: "Validação inicial",
+    responsavel: "Comercial + Financeiro",
+    itens: [
+      { id: "vi-1", texto: "Serviços contratados confirmados" },
+      { id: "vi-2", texto: "Honorário confirmado" },
+      { id: "vi-3", texto: "Regime tributário validado" },
+      { id: "vi-4", texto: "Data oficial de início definida" },
+      { id: "vi-5", texto: "Responsável pela integração definido" },
+      { id: "vi-6", texto: "Cliente cadastrado no ContaAzul" },
+      { id: "vi-7", texto: "Contrato de prestação gerado no D4Sign" },
+      { id: "vi-8", texto: "Contrato enviado ao cliente" },
+      { id: "vi-9", texto: "Contrato assinado e salvo no Google Drive" },
+      { id: "vi-10", texto: "Boleto gerado conforme vencimento padrão" },
+      { id: "vi-11", texto: "Mensagem de aviso sobre o número do financeiro (64 8103-5520), forma de pagamento e envio do boleto" },
+    ],
+  },
+  "2. Cadastro Administrativo": {
+    titulo: "Administrativo",
+    responsavel: "Bruna · Implantação",
+    itens: [
+      { id: "ad-1", texto: "Empresa cadastrada no Domínio" },
+      { id: "ad-2", texto: "Procuração eletrônica ECAC (contador e escritório) solicitada ao cliente" },
+      { id: "ad-3", texto: "Pasta do cliente criada e organizada no Drive" },
+      { id: "ad-4", texto: "Procuração FGTS e Adesão do DET" },
+      { id: "ad-5", texto: "Cliente incluído nos agrupadores de tarefas" },
+      { id: "ad-6", texto: "Tarefas mensais vinculadas corretamente" },
+      { id: "ad-7", texto: "Classificação correta (Comércio / Serviço / Indústria)" },
+      { id: "ad-8", texto: "Procuração da prefeitura (WebISS etc.)" },
+      { id: "ad-9", texto: "Inclusão de contador no Redesim" },
+      { id: "ad-10", texto: "Confirmar se tem inscrição estadual" },
+      { id: "ad-11", texto: "Mensagem de boas-vindas enviada" },
+      { id: "ad-12", texto: "Solicitação de lista de documentos" },
+      { id: "ad-13", texto: "Documentos recebidos" },
+      { id: "ad-14", texto: "Documentos salvos na pasta do cliente no Google Drive" },
+      { id: "ad-15", texto: "Certificado digital salvo no Drive" },
+      { id: "ad-16", texto: "Adesão do DTE na Sefaz (se comércio)" },
+      { id: "ad-17", texto: "Habilitar emissão de nota fiscal na Sefaz (se comércio)" },
+    ],
+  },
+  "4. Operação – Parametrização": {
+    titulo: "Operação — Parametrização",
+    responsavel: "Fernanda · Fiscal / Daniela · DP",
+    itens: [
+      { id: "op-1", texto: "Regime configurado corretamente no sistema" },
+      { id: "op-2", texto: "CNAEs conferidos" },
+      { id: "op-3", texto: "Responsável técnico vinculado" },
+      { id: "op-4", texto: "Cliente incluído nos agrupadores de tarefas" },
+      { id: "op-5", texto: "Cadastro no SIEG realizado" },
+      { id: "op-6", texto: "Teste de captura de notas realizado" },
+      { id: "op-7", texto: "Cadastro no GOB realizado" },
+      { id: "op-8", texto: "Integrações testadas" },
+      { id: "op-9", texto: "Cadastro no sistema de folha (DP, se aplicável)" },
+      { id: "op-10", texto: "Parametrizações trabalhistas concluídas" },
+    ],
+  },
+  "5. Reunião e Portal": {
+    titulo: "Integração com o cliente",
+    responsavel: "Raphael",
+    itens: [
+      { id: "in-1", texto: "Reunião de integração realizada com o cliente" },
+      { id: "in-2", texto: "Apresentação da Canvas e responsabilidades das áreas" },
+      { id: "in-3", texto: "Alinhamento de prazos e rotina mensal" },
+      { id: "in-4", texto: "Acesso ao Portal do Cliente / Onvio enviado" },
+      { id: "in-5", texto: "Documentação organizada" },
+      { id: "in-6", texto: "Cliente orientado sobre envio de documentos" },
+      { id: "in-7", texto: "Confirmado que o cliente conseguiu acessar o portal" },
+      { id: "in-8", texto: "Primeira entrega validada internamente" },
+      { id: "in-9", texto: "Feedback inicial registrado" },
+      { id: "in-10", texto: "DCTFWeb de abertura (quando for abertura) — Bruna" },
+    ],
+  },
+};
+
 async function initDb() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
   await pool.query(`
@@ -98,6 +177,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS agenda_slug_map JSONB NOT NULL DEFAULT '{}';`);
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS origens_lead JSONB NOT NULL DEFAULT '[]';`);
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS last_stale_digest_sent_date DATE;`);
+  await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS onboard_checklists JSONB NOT NULL DEFAULT '{}';`);
   await pool.query(`INSERT INTO integration_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
   await pool.query(`
     UPDATE integration_settings SET origens_lead = $1
@@ -109,6 +189,13 @@ async function initDb() {
     { id: "ol-4", nome: "Site" },
     { id: "ol-5", nome: "Networking" },
   ])]);
+
+  // Checklists de integração -- trazidos do board "Integração do Cliente" do Trello (cada etapa do
+  // funil de Integração passa a ter uma lista de tarefas obrigatórias, com validação antes de avançar).
+  await pool.query(`
+    UPDATE integration_settings SET onboard_checklists = $1
+    WHERE id = 1 AND (onboard_checklists IS NULL OR onboard_checklists = '{}'::jsonb)
+  `, [JSON.stringify(DEFAULT_ONBOARD_CHECKLISTS)]);
 
   // Migração de continuidade: se existir o antigo app_state (versão anterior, sem login),
   // importa os dados de lá para as tabelas novas na primeira vez que o servidor novo sobe.
@@ -357,6 +444,13 @@ app.put("/api/pricing", requireAuth, requireRole("admin"), async (req, res) => {
 
 app.get("/api/users/basic", requireAuth, async (req, res) => {
   const { rows } = await pool.query("SELECT id, name FROM users ORDER BY name");
+  res.json({ users: rows });
+});
+
+// Lista só os administradores -- usado pra quem não é admin saber a quem pedir autorização
+// de avançar uma etapa de integração com checklist incompleto.
+app.get("/api/users/admins", requireAuth, async (req, res) => {
+  const { rows } = await pool.query("SELECT id, name FROM users WHERE role = 'admin' ORDER BY name");
   res.json({ users: rows });
 });
 
@@ -923,6 +1017,22 @@ app.put("/api/origens-lead", requireAuth, requireRole("admin", "comercial"), asy
   await pool.query(
     "UPDATE integration_settings SET origens_lead = $1, updated_by = $2, updated_at = now() WHERE id = 1",
     [JSON.stringify(origens || []), req.user.email]
+  );
+  res.json({ ok: true });
+});
+
+// Checklists de integração -- qualquer pessoa logada pode ler (precisa pra marcar os itens),
+// só admin e comercial podem editar o texto/estrutura dos checklists.
+app.get("/api/onboard-checklists", requireAuth, async (req, res) => {
+  const { rows } = await pool.query("SELECT onboard_checklists FROM integration_settings WHERE id = 1");
+  res.json({ checklists: (rows[0] && rows[0].onboard_checklists) || {} });
+});
+
+app.put("/api/onboard-checklists", requireAuth, requireRole("admin", "comercial"), async (req, res) => {
+  const { checklists } = req.body;
+  await pool.query(
+    "UPDATE integration_settings SET onboard_checklists = $1, updated_by = $2, updated_at = now() WHERE id = 1",
+    [JSON.stringify(checklists || {}), req.user.email]
   );
   res.json({ ok: true });
 });
