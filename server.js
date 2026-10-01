@@ -873,19 +873,32 @@ const GMAIL_USER = process.env.GMAIL_USER;
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
 const EMAIL_CONFIGURED = !!(GMAIL_USER && GMAIL_APP_PASSWORD);
 
+// Railway (e provedores de nuvem parecidos) costuma bloquear conexões SMTP de saída,
+// então tentamos a porta 465 (SSL direto) e, se travar, caímos pra porta 587 (STARTTLS)
+// -- uma das duas costuma ser liberada. Se nenhuma funcionar, o bloqueio é total e
+// precisamos trocar de estratégia (API HTTP de e-mail em vez de SMTP puro).
+const SMTP_TIMEOUTS = { connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 12000 };
+
+const mailTransporter465 = EMAIL_CONFIGURED
+  ? nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }, family: 4, ...SMTP_TIMEOUTS })
+  : null;
+
+const mailTransporter587 = EMAIL_CONFIGURED
+  ? nodemailer.createTransport({ host: "smtp.gmail.com", port: 587, secure: false, requireTLS: true, auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }, family: 4, ...SMTP_TIMEOUTS })
+  : null;
+
+// Mantém o nome usado no resto do arquivo, mas com fallback automático de porta.
 const mailTransporter = EMAIL_CONFIGURED
-  ? nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
-      auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 20000,
-      // Em alguns provedores de nuvem (incluindo Railway), a tentativa de conexão IPv6
-      // para o Gmail trava sem nunca dar erro nem completar -- forçar IPv4 evita isso.
-      family: 4,
-    })
+  ? {
+      sendMail: async (opts) => {
+        try {
+          return await mailTransporter465.sendMail(opts);
+        } catch (err465) {
+          console.error(`Falhou na porta 465 (${err465.message}), tentando porta 587...`);
+          return await mailTransporter587.sendMail(opts);
+        }
+      },
+    }
   : null;
 
 function diasParado(dataISO) {
@@ -1043,13 +1056,27 @@ function montarEmailIntegracaoHtml(itens) {
   `;
 }
 
+// Por padrão o resumo vai pra todos os administradores. Pra mandar só pra uma pessoa
+// (ou pra uma lista específica), defina a variável de ambiente INTEGRATION_DIGEST_RECIPIENTS
+// no Railway com o(s) e-mail(s) separados por vírgula, ex: "raphaelrochacontador@gmail.com".
+const INTEGRATION_DIGEST_RECIPIENTS = (process.env.INTEGRATION_DIGEST_RECIPIENTS || "")
+  .split(",")
+  .map((e) => e.trim())
+  .filter(Boolean);
+
 async function enviarDigestIntegracao() {
   if (!EMAIL_CONFIGURED) return { sent: 0, reason: "E-mail não configurado (faltam GMAIL_USER/GMAIL_APP_PASSWORD)." };
   const itens = await buscarStatusIntegracao();
   const html = montarEmailIntegracaoHtml(itens);
-  const { rows } = await pool.query("SELECT name, email FROM users WHERE role = 'admin'");
+  let destinatarios;
+  if (INTEGRATION_DIGEST_RECIPIENTS.length > 0) {
+    destinatarios = INTEGRATION_DIGEST_RECIPIENTS.map((email) => ({ email }));
+  } else {
+    const { rows } = await pool.query("SELECT name, email FROM users WHERE role = 'admin'");
+    destinatarios = rows;
+  }
   const resultados = await Promise.allSettled(
-    rows.map(({ email }) =>
+    destinatarios.map(({ email }) =>
       mailTransporter.sendMail({
         from: `"CRM Canvas Contabilidade" <${GMAIL_USER}>`,
         to: email,
@@ -1061,9 +1088,9 @@ async function enviarDigestIntegracao() {
   let sent = 0;
   resultados.forEach((r, i) => {
     if (r.status === "fulfilled") sent++;
-    else console.error(`Erro ao enviar e-mail de integração pra ${rows[i].email}:`, r.reason && r.reason.message);
+    else console.error(`Erro ao enviar e-mail de integração pra ${destinatarios[i].email}:`, r.reason && r.reason.message);
   });
-  return { sent, destinatarios: rows.length };
+  return { sent, destinatarios: destinatarios.length };
 }
 
 app.get("/api/reports/integration-status", requireAuth, async (req, res) => {
