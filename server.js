@@ -177,6 +177,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS agenda_slug_map JSONB NOT NULL DEFAULT '{}';`);
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS origens_lead JSONB NOT NULL DEFAULT '[]';`);
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS last_stale_digest_sent_date DATE;`);
+  await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS last_integration_digest_sent_date DATE;`);
   await pool.query(`ALTER TABLE integration_settings ADD COLUMN IF NOT EXISTS onboard_checklists JSONB NOT NULL DEFAULT '{}';`);
   await pool.query(`INSERT INTO integration_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
   await pool.query(`
@@ -959,6 +960,138 @@ async function enviarDigestDiario() {
   }
   return { sent, vendedores: vendedorIds.length };
 }
+
+// ---- Relatório diário de Integração (7h) -- status de cada cliente em integração, com
+// progresso do checklist da etapa atual, dias parado naquela etapa e pedidos de autorização
+// pendentes. Vai pra todo administrador cadastrado.
+
+// Ordem das etapas só pra ordenar o e-mail -- os nomes já vêm com "1.", "2." etc. na frente,
+// então um sort de texto simples já respeita a ordem certa.
+async function buscarStatusIntegracao() {
+  const clientsResult = await pool.query("SELECT data FROM clients");
+  const settingsResult = await pool.query("SELECT onboard_checklists FROM integration_settings WHERE id = 1");
+  const checklists = (settingsResult.rows[0] && settingsResult.rows[0].onboard_checklists) || {};
+  const clients = clientsResult.rows
+    .map((r) => r.data)
+    .filter((c) => c.status === "ganho" && c.onboardStage && c.onboardStage !== "Distratado");
+
+  const itens = clients.map((c) => {
+    const cfg = checklists[c.onboardStage];
+    const prog = c.checklistProgresso || {};
+    let checklistTxt = "—";
+    if (cfg && Array.isArray(cfg.itens) && cfg.itens.length > 0) {
+      const total = cfg.itens.length;
+      const feitos = cfg.itens.filter((it) => prog[it.id] && prog[it.id].feito).length;
+      checklistTxt = `${feitos}/${total}`;
+    }
+    return {
+      razaoSocial: c.razaoSocial || "Sem nome",
+      etapa: c.onboardStage,
+      checklist: checklistTxt,
+      dias: diasParado(c.onboardStageUpdatedAt || c.dataVenda),
+      pendenteAutorizacao: !!c.pedidoAutorizacaoAvanco,
+    };
+  });
+
+  itens.sort((a, b) => (a.etapa === b.etapa ? b.dias - a.dias : a.etapa.localeCompare(b.etapa)));
+  return itens;
+}
+
+function montarEmailIntegracaoHtml(itens) {
+  const linhas = itens
+    .map(
+      (i) => `
+        <tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;">${i.razaoSocial}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;">${i.etapa}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;text-align:center;font-family:monospace;">${i.checklist}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;text-align:right;color:${i.dias >= 5 ? "#A8483E" : i.dias >= 2 ? "#8A6524" : "#5A5548"};font-weight:${i.dias >= 2 ? 700 : 400};">${i.dias} dia${i.dias === 1 ? "" : "s"}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;${i.pendenteAutorizacao ? "color:#A8483E;font-weight:700;" : "color:#B0AA98;"}">${i.pendenteAutorizacao ? "⏳ aguardando autorização" : "—"}</td>
+        </tr>`
+    )
+    .join("");
+  const pendentes = itens.filter((i) => i.pendenteAutorizacao).length;
+  return `
+    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:700px;margin:0 auto;">
+      <h2 style="color:#152E25;">Status da Integração — hoje</h2>
+      <p style="color:#5A5548;">${itens.length} cliente${itens.length === 1 ? "" : "s"} em integração${pendentes > 0 ? `, ${pendentes} aguardando sua autorização` : ""}.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="background:#F3F0E6;">
+            <th style="padding:8px 12px;text-align:left;">Cliente</th>
+            <th style="padding:8px 12px;text-align:left;">Etapa</th>
+            <th style="padding:8px 12px;text-align:center;">Checklist</th>
+            <th style="padding:8px 12px;text-align:right;">Dias parado na etapa</th>
+            <th style="padding:8px 12px;text-align:left;">Situação</th>
+          </tr>
+        </thead>
+        <tbody>${linhas || `<tr><td colspan="5" style="padding:14px;color:#8B8577;">Nenhum cliente em integração no momento.</td></tr>`}</tbody>
+      </table>
+      <p style="color:#8B8577;font-size:12px;margin-top:20px;">Mensagem automática do CRM Canvas Contabilidade.</p>
+    </div>
+  `;
+}
+
+async function enviarDigestIntegracao() {
+  if (!EMAIL_CONFIGURED) return { sent: 0, reason: "E-mail não configurado (faltam GMAIL_USER/GMAIL_APP_PASSWORD)." };
+  const itens = await buscarStatusIntegracao();
+  const html = montarEmailIntegracaoHtml(itens);
+  const { rows } = await pool.query("SELECT name, email FROM users WHERE role = 'admin'");
+  let sent = 0;
+  for (const { email } of rows) {
+    try {
+      await mailTransporter.sendMail({
+        from: `"CRM Canvas Contabilidade" <${GMAIL_USER}>`,
+        to: email,
+        subject: `Integração: ${itens.length} cliente(s) em andamento`,
+        html,
+      });
+      sent++;
+    } catch (err) {
+      console.error(`Erro ao enviar e-mail de integração pra ${email}:`, err.message);
+    }
+  }
+  return { sent, destinatarios: rows.length };
+}
+
+app.get("/api/reports/integration-status", requireAuth, async (req, res) => {
+  const itens = await buscarStatusIntegracao();
+  res.json({ emailConfigured: EMAIL_CONFIGURED, itens });
+});
+
+app.post("/api/reports/send-integration-digest", requireAuth, requireRole("admin"), async (req, res) => {
+  try {
+    const result = await enviarDigestIntegracao();
+    if (result.reason) return res.status(409).json({ error: result.reason });
+    await pool.query("UPDATE integration_settings SET last_integration_digest_sent_date = CURRENT_DATE WHERE id = 1");
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Não foi possível enviar os e-mails." });
+  }
+});
+
+// Roda a cada hora; dispara o resumo de integração uma única vez por dia, às 7h no horário de
+// Brasília -- calculado explicitamente (não usa o fuso do servidor, que no Railway normalmente
+// é UTC) pra não depender de nenhuma configuração extra de TZ.
+function horaBrasilia() {
+  return parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", hour: "2-digit", hour12: false }).format(new Date()), 10);
+}
+
+setInterval(async () => {
+  if (!EMAIL_CONFIGURED) return;
+  const now = new Date();
+  if (horaBrasilia() !== 7) return;
+  try {
+    const { rows } = await pool.query("SELECT last_integration_digest_sent_date FROM integration_settings WHERE id = 1");
+    const jaEnviouHoje = rows[0] && rows[0].last_integration_digest_sent_date && new Date(rows[0].last_integration_digest_sent_date).toDateString() === now.toDateString();
+    if (jaEnviouHoje) return;
+    await enviarDigestIntegracao();
+    await pool.query("UPDATE integration_settings SET last_integration_digest_sent_date = CURRENT_DATE WHERE id = 1");
+  } catch (err) {
+    console.error("Erro no envio automático do resumo de integração:", err);
+  }
+}, 60 * 60 * 1000);
 
 app.get("/api/reports/stale-negotiations", requireAuth, async (req, res) => {
   const porVendedor = await buscarNegociacoesPatadas(1);

@@ -77,3 +77,31 @@ Depois de adicionar, **Redeploy** o serviço.
 3. Na ficha do cliente, o botão **"Adicionar ao Google Agenda"** cria o evento na agenda daquela pessoa
 
 Se o app ainda estiver em "modo de teste" na tela de consentimento do Google, só os e-mails cadastrados como "usuários de teste" no passo 1 conseguem conectar — para liberar para qualquer pessoa, é preciso publicar o app (Google pode pedir verificação, dependendo dos escopos usados).
+
+## Integração com Trello (opcional)
+
+Sincroniza o funil de Integração do CRM com um board do Trello — cria o card quando marca "Ganho", move sozinho quando avança a etapa, e também escuta mudanças feitas direto no Trello.
+
+### 1. Gerar a API Key e o Token
+1. Acesse https://trello.com/power-ups/admin
+2. Cria um Power-Up novo (ex: "CRM Canvas") — isso te dá uma **API Key**
+3. Com a chave em mãos, acesse (trocando `SUA_API_KEY`):
+   `https://trello.com/1/authorize?expiration=never&scope=read,write&response_type=token&key=SUA_API_KEY`
+4. Autoriza — isso gera o **Token**
+
+### 2. Configurar no Railway
+No serviço principal → **Variables**, adiciona:
+- `TRELLO_API_KEY`
+- `TRELLO_TOKEN`
+
+Depois, **Redeploy**.
+
+### 3. Configurar dentro do CRM
+1. Login como admin → menu **Integrações**
+2. Cola o **ID do board** (pega adicionando `.json` no final da URL do board e copiando o campo `"id"`)
+3. Clica em **Buscar listas**
+4. Escolhe qual lista do Trello corresponde a cada etapa do funil de Integração
+5. **Salvar mapeamento**
+6. Clica em **Ativar** (sincronização automática) — isso registra um webhook pro Trello avisar o CRM quando alguém mover um card lá
+
+A partir daí, tudo o que acontecer daqui pra frente sincroniza nos dois sentidos. Cards/clientes anteriores à ativação não são importados automaticamente.
