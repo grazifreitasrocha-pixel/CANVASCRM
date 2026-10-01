@@ -875,11 +875,16 @@ const EMAIL_CONFIGURED = !!(GMAIL_USER && GMAIL_APP_PASSWORD);
 
 const mailTransporter = EMAIL_CONFIGURED
   ? nodemailer.createTransport({
-      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
       auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
       connectionTimeout: 15000,
       greetingTimeout: 15000,
       socketTimeout: 20000,
+      // Em alguns provedores de nuvem (incluindo Railway), a tentativa de conexão IPv6
+      // para o Gmail trava sem nunca dar erro nem completar -- forçar IPv4 evita isso.
+      family: 4,
     })
   : null;
 
