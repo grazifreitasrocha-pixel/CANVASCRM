@@ -874,7 +874,13 @@ const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
 const EMAIL_CONFIGURED = !!(GMAIL_USER && GMAIL_APP_PASSWORD);
 
 const mailTransporter = EMAIL_CONFIGURED
-  ? nodemailer.createTransport({ service: "gmail", auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD } })
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
+    })
   : null;
 
 function diasParado(dataISO) {
@@ -1037,20 +1043,21 @@ async function enviarDigestIntegracao() {
   const itens = await buscarStatusIntegracao();
   const html = montarEmailIntegracaoHtml(itens);
   const { rows } = await pool.query("SELECT name, email FROM users WHERE role = 'admin'");
-  let sent = 0;
-  for (const { email } of rows) {
-    try {
-      await mailTransporter.sendMail({
+  const resultados = await Promise.allSettled(
+    rows.map(({ email }) =>
+      mailTransporter.sendMail({
         from: `"CRM Canvas Contabilidade" <${GMAIL_USER}>`,
         to: email,
         subject: `Integração: ${itens.length} cliente(s) em andamento`,
         html,
-      });
-      sent++;
-    } catch (err) {
-      console.error(`Erro ao enviar e-mail de integração pra ${email}:`, err.message);
-    }
-  }
+      })
+    )
+  );
+  let sent = 0;
+  resultados.forEach((r, i) => {
+    if (r.status === "fulfilled") sent++;
+    else console.error(`Erro ao enviar e-mail de integração pra ${rows[i].email}:`, r.reason && r.reason.message);
+  });
   return { sent, destinatarios: rows.length };
 }
 
@@ -1061,12 +1068,16 @@ app.get("/api/reports/integration-status", requireAuth, async (req, res) => {
 
 app.post("/api/reports/send-integration-digest", requireAuth, requireRole("admin"), async (req, res) => {
   try {
-    const result = await enviarDigestIntegracao();
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000));
+    const result = await Promise.race([enviarDigestIntegracao(), timeout]);
     if (result.reason) return res.status(409).json({ error: result.reason });
     await pool.query("UPDATE integration_settings SET last_integration_digest_sent_date = CURRENT_DATE WHERE id = 1");
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error(err);
+    if (err.message === "timeout") {
+      return res.status(504).json({ error: "O envio demorou demais e foi cancelado. Verifique se GMAIL_USER/GMAIL_APP_PASSWORD estão corretos e tente de novo." });
+    }
     res.status(500).json({ error: "Não foi possível enviar os e-mails." });
   }
 });
