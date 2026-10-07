@@ -677,7 +677,7 @@ ${divider}
 ${divider}
 
 • Tipo de entrada: *${c.tipoEntrada||"não informado"}*
-• Regime: ${c.regimeTributario}${c.atividade&&(c.regimeTributario==="Simples Nacional"||c.regimeTributario==="Lucro Presumido")?" — "+c.atividade:""}
+• Regime: ${c.regimeTributario}${c.atividade&&(c.regimeTributario==="Simples Nacional"||c.regimeTributario==="Lucro Presumido")?" — "+c.atividade:""}${c.regimeTributario==="Simples Nacional"?`\n• Anexo V do Simples: *${c.anexoV||"não informado"}*${c.anexoV==="Sim"?`\n• Pró-labore: *${c.proLabore||"não informado"}*`:""}`:""}
 • Nº de funcionários: ${c.numFuncionarios||"0"}
 • Nº de notas fiscais/mês: ${c.numNotasFiscais||"0"}
 
