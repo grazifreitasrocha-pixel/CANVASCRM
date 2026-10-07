@@ -103,6 +103,10 @@ const ITEM_RESP = {
   ...Object.fromEntries(["op-1", "op-2", "op-3", "op-4", "op-5", "op-6", "op-7", "op-8"].map((id) => [id, "Fiscal"])),
   "op-9": "DP",
   "op-10": "DP",
+  "ad-3": "Comercial",
+  "ad-12": "Comercial",
+  "ad-13": "Comercial",
+  "ad-14": "Comercial",
   "in-10": "Bruna",
 };
 function range17(prefix) {
@@ -127,7 +131,12 @@ const range = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}-${i 
 // comercial. Documentos/certificado (que dependem do cliente) ficam em "Aguardando Documentação".
 const DEFAULT_ONBOARD_CHECKLISTS = montaChecklists({
   // Etapa 1: só o que o COMERCIAL (e o financeiro) faz logo depois do fechamento.
-  "1. Venda Ganha": { titulo: "Validação inicial", responsavel: "Comercial + Financeiro", ids: range("vi", 11) },
+  // Também é do comercial: criar a pasta do cliente no Drive, solicitar a lista de documentos e salvar o que chegar.
+  "1. Venda Ganha": {
+    titulo: "Validação inicial e documentos",
+    responsavel: "Comercial + Financeiro",
+    ids: ["vi-1", "vi-2", "vi-3", "vi-4", "vi-5", "vi-6", "vi-7", "vi-8", "ad-3", "vi-9", "vi-10", "vi-11", "ad-12", "ad-13", "ad-14"],
+  },
   // Etapa 2: todo cadastro e toda procuração (a ordem segue a dependência: o certificado vem antes do
   // SIEG, e o GOB vem depois das procurações).
   "2. Cadastro Administrativo": {
@@ -135,13 +144,13 @@ const DEFAULT_ONBOARD_CHECKLISTS = montaChecklists({
     responsavel: "Bruna · Fiscal · DP",
     ids: ["ad-1", "ad-7", "ad-10", "ad-9", "ad-15", "op-5", "ad-2", "ad-4", "ad-8", "op-7", "op-9", "ad-16", "ad-17"],
   },
-  // Etapa 3: boas-vindas, pedido e recebimento dos documentos (a pasta do Drive vem antes de guardar neles).
+  // Etapa 3: boas-vindas e agrupadores de tarefas (documentos agora são pedidos e salvos pelo comercial na etapa 1).
   "3. Aguardando Documentação": {
-    titulo: "Implantação e documentação do cliente",
-    responsavel: "Bruna · Implantação (depende do cliente)",
-    ids: ["ad-11", "ad-12", "ad-3", "ad-5", "ad-6", "ad-13", "ad-14"],
+    titulo: "Implantação do cliente",
+    responsavel: "Bruna · Implantação",
+    ids: ["ad-11", "ad-5"],
   },
-  "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
+  "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "ad-6", "op-6", "op-8", "op-10"] },
   "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
   "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
 });
@@ -221,6 +230,27 @@ const LEGACY_ONBOARD_CHECKLISTS = [
   "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
   "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
 }, true),
+  // V5: cadastros na etapa 2, documentos na etapa 3
+  montaChecklists({
+    // Etapa 1: só o que o COMERCIAL (e o financeiro) faz logo depois do fechamento.
+    "1. Venda Ganha": { titulo: "Validação inicial", responsavel: "Comercial + Financeiro", ids: range("vi", 11) },
+    // Etapa 2: todo cadastro e toda procuração (a ordem segue a dependência: o certificado vem antes do
+    // SIEG, e o GOB vem depois das procurações).
+    "2. Cadastro Administrativo": {
+      titulo: "Cadastros e procurações",
+      responsavel: "Bruna · Fiscal · DP",
+      ids: ["ad-1", "ad-7", "ad-10", "ad-9", "ad-15", "op-5", "ad-2", "ad-4", "ad-8", "op-7", "op-9", "ad-16", "ad-17"],
+    },
+    // Etapa 3: boas-vindas, pedido e recebimento dos documentos (a pasta do Drive vem antes de guardar neles).
+    "3. Aguardando Documentação": {
+      titulo: "Implantação e documentação do cliente",
+      responsavel: "Bruna · Implantação (depende do cliente)",
+      ids: ["ad-11", "ad-12", "ad-3", "ad-5", "ad-6", "ad-13", "ad-14"],
+    },
+    "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
+    "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+    "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+  }, true),
 ];
 
 async function initDb() {
