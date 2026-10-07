@@ -506,19 +506,41 @@ app.get("/api/clients", requireAuth, async (req, res) => {
   res.json({ clients: rows.map((r) => r.data) });
 });
 
-// Upsert em lote -- comercial e admin podem criar/editar clientes e vendas.
+// Versão do sistema. Precisa ser igual ao APP_BUILD do index.html; se mudar, telas abertas são avisadas.
+const APP_BUILD = "2026-10-07-sync1";
+app.get("/api/version", (req, res) => res.json({ build: APP_BUILD }));
+
+// Grava só o que mudou em cada cliente (campo a campo), em cima do que já está no banco.
+// Assim uma tela desatualizada nunca apaga o que outra pessoa preencheu.
+// Telas antigas (sem o cabeçalho de versão, ou com versão diferente) são recusadas.
 app.put("/api/clients", requireAuth, requireRole("admin", "comercial"), async (req, res) => {
-  const { clients } = req.body;
-  if (!Array.isArray(clients)) return res.status(400).json({ error: "Formato inválido." });
+  if (req.headers["x-app-build"] !== APP_BUILD || !Array.isArray(req.body.patches)) {
+    return res.status(409).json({ error: "Versão antiga do sistema. Atualize a página (Ctrl+Shift+R).", code: "old_build" });
+  }
+  const patches = req.body.patches;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    for (const c of clients) {
-      await client.query(
-        `INSERT INTO clients (id, data, updated_by, updated_at) VALUES ($1,$2,$3, now())
-         ON CONFLICT (id) DO UPDATE SET data = $2, updated_by = $3, updated_at = now()`,
-        [c.id, JSON.stringify(c), req.user.email]
-      );
+    for (const p of patches) {
+      if (!p || !p.id) continue;
+      const cur = await client.query("SELECT data FROM clients WHERE id = $1 FOR UPDATE", [p.id]);
+      if (cur.rows.length === 0) {
+        const novo = p.full || { id: p.id, ...(p.set || {}) };
+        await client.query(
+          `INSERT INTO clients (id, data, updated_by, updated_at) VALUES ($1,$2,$3, now())
+           ON CONFLICT (id) DO NOTHING`,
+          [p.id, JSON.stringify({ ...novo, id: p.id }), req.user.email]
+        );
+        continue;
+      }
+      const merged = { ...cur.rows[0].data, ...(p.full || p.set || {}) };
+      (p.unset || []).forEach((k) => delete merged[k]);
+      merged.id = p.id;
+      await client.query("UPDATE clients SET data = $1, updated_by = $2, updated_at = now() WHERE id = $3", [
+        JSON.stringify(merged),
+        req.user.email,
+        p.id,
+      ]);
     }
     await client.query("COMMIT");
     res.json({ ok: true });
