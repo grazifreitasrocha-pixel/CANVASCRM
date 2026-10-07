@@ -130,33 +130,64 @@ const range = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}-${i 
 // Ordem atual: TODO cadastro e TODA procuração ficam na primeira etapa, logo depois do fechamento
 // comercial. Documentos/certificado (que dependem do cliente) ficam em "Aguardando Documentação".
 const DEFAULT_ONBOARD_CHECKLISTS = montaChecklists({
-  // Etapa 1: só o que o COMERCIAL (e o financeiro) faz logo depois do fechamento.
-  // Também é do comercial: criar a pasta do cliente no Drive, solicitar a lista de documentos e salvar o que chegar.
+  // Etapa 1: o que o COMERCIAL (e o financeiro) faz logo depois do fechamento -- inclusive criar a pasta
+  // do cliente no Drive, pedir a lista de documentos e salvar o que chegar.
   "1. Venda Ganha": {
     titulo: "Validação inicial e documentos",
     responsavel: "Comercial + Financeiro",
-    ids: ["vi-1", "vi-2", "vi-3", "vi-4", "vi-5", "vi-6", "vi-7", "vi-8", "ad-3", "vi-9", "vi-10", "vi-11", "ad-12", "ad-13", "ad-14"],
+    ids: ["vi-1", "vi-2", "vi-3", "vi-4", "vi-5", "vi-6", "vi-7", "vi-8", "ad-3", "ad-12", "vi-9", "vi-10", "vi-11", "ad-13", "ad-14"],
   },
-  // Etapa 2: todo cadastro e toda procuração (a ordem segue a dependência: o certificado vem antes do
-  // SIEG, e o GOB vem depois das procurações).
+  // Etapa 2: quem cuida da integração recebe o cliente (boas-vindas primeiro) e faz todo cadastro e toda
+  // procuração (o certificado vem antes do SIEG, e o GOB depois das procurações).
   "2. Cadastro Administrativo": {
-    titulo: "Cadastros e procurações",
+    titulo: "Boas-vindas, cadastros e procurações",
     responsavel: "Bruna · Fiscal · DP",
-    ids: ["ad-1", "ad-7", "ad-10", "ad-9", "ad-15", "op-5", "ad-2", "ad-4", "ad-8", "op-7", "op-9", "ad-16", "ad-17"],
+    ids: ["ad-11", "ad-1", "ad-7", "ad-5", "ad-10", "ad-9", "ad-15", "op-5", "ad-2", "ad-4", "ad-8", "op-7", "op-9", "ad-16", "ad-17"],
   },
-  // Etapa 3: boas-vindas e agrupadores de tarefas (documentos agora são pedidos e salvos pelo comercial na etapa 1).
-  "3. Aguardando Documentação": {
-    titulo: "Implantação do cliente",
-    responsavel: "Bruna · Implantação",
-    ids: ["ad-11", "ad-5"],
-  },
-  "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "ad-6", "op-6", "op-8", "op-10"] },
-  "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
-  "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+  "3. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "ad-6", "op-6", "op-8", "op-10"] },
+  "4. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+  "5. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
 });
 
-// Arranjos anteriores. Só servem pra reconhecer um banco que ainda está com um deles, sem nenhuma
-// edição, e migrá-lo sozinho pra ordem atual. Se alguém já editou, não mexemos.
+// A etapa "3. Aguardando Documentação" foi eliminada e as seguintes subiram de número.
+const ETAPA_RENOMEIA = {
+  "3. Aguardando Documentação": "3. Operação – Parametrização",
+  "4. Operação – Parametrização": "3. Operação – Parametrização",
+  "5. Reunião e Portal": "4. Reunião e Portal",
+  "6. Primeira Entrega": "5. Primeira Entrega",
+  "7. Cliente Integrado": "6. Cliente Integrado",
+};
+const ETAPA_REMOVIDA = "3. Aguardando Documentação";
+const renomeiaEtapa = (n) => ETAPA_RENOMEIA[n] || n;
+
+// Para checklists que alguém já editou: mantém as edições, renomeia as etapas e reparte os itens da etapa removida.
+function reestruturaChecklists(cfg) {
+  const out = {};
+  for (const [k, v] of Object.entries(cfg)) {
+    if (k !== ETAPA_REMOVIDA) out[renomeiaEtapa(k)] = v;
+  }
+  const antigo = cfg[ETAPA_REMOVIDA];
+  const garante = (nome) => (out[nome] = out[nome] || { titulo: nome.replace(/^\d+\.\s*/, ""), responsavel: "", itens: [] });
+  if (antigo && Array.isArray(antigo.itens)) {
+    antigo.itens.forEach((it) => {
+      if (it.id === "ad-11") {
+        const e2 = garante("2. Cadastro Administrativo");
+        e2.itens = [it, ...(e2.itens || [])];
+      } else if (["ad-12", "ad-13", "ad-14"].includes(it.id)) {
+        const e1 = garante("1. Venda Ganha");
+        e1.itens = [...(e1.itens || []), { ...it, resp: "Comercial" }];
+      } else if (it.id === "ad-6") {
+        const e3 = garante("3. Operação – Parametrização");
+        e3.itens = [...(e3.itens || []), it];
+      } else {
+        const e2 = garante("2. Cadastro Administrativo");
+        e2.itens = [...(e2.itens || []), it];
+      }
+    });
+  }
+  return out;
+}
+
 const LEGACY_ONBOARD_CHECKLISTS = [
   // V1: importado 1:1 do Trello
   montaChecklists({
@@ -248,6 +279,32 @@ const LEGACY_ONBOARD_CHECKLISTS = [
       ids: ["ad-11", "ad-12", "ad-3", "ad-5", "ad-6", "ad-13", "ad-14"],
     },
     "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
+    "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+    "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+  }, true),
+  // V6: documentos na etapa 1, etapa 3 ainda existia
+  montaChecklists({
+    // Etapa 1: só o que o COMERCIAL (e o financeiro) faz logo depois do fechamento.
+    // Também é do comercial: criar a pasta do cliente no Drive, solicitar a lista de documentos e salvar o que chegar.
+    "1. Venda Ganha": {
+      titulo: "Validação inicial e documentos",
+      responsavel: "Comercial + Financeiro",
+      ids: ["vi-1", "vi-2", "vi-3", "vi-4", "vi-5", "vi-6", "vi-7", "vi-8", "ad-3", "vi-9", "vi-10", "vi-11", "ad-12", "ad-13", "ad-14"],
+    },
+    // Etapa 2: todo cadastro e toda procuração (a ordem segue a dependência: o certificado vem antes do
+    // SIEG, e o GOB vem depois das procurações).
+    "2. Cadastro Administrativo": {
+      titulo: "Cadastros e procurações",
+      responsavel: "Bruna · Fiscal · DP",
+      ids: ["ad-1", "ad-7", "ad-10", "ad-9", "ad-15", "op-5", "ad-2", "ad-4", "ad-8", "op-7", "op-9", "ad-16", "ad-17"],
+    },
+    // Etapa 3: boas-vindas e agrupadores de tarefas (documentos agora são pedidos e salvos pelo comercial na etapa 1).
+    "3. Aguardando Documentação": {
+      titulo: "Implantação do cliente",
+      responsavel: "Bruna · Implantação",
+      ids: ["ad-11", "ad-5"],
+    },
+    "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "ad-6", "op-6", "op-8", "op-10"] },
     "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
     "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
   }, true),
@@ -353,7 +410,49 @@ async function initDb() {
     if (atual.rows[0] && LEGACY_ONBOARD_CHECKLISTS.some((v) => isDeepStrictEqual(atual.rows[0].onboard_checklists, v))) {
       await pool.query("UPDATE integration_settings SET onboard_checklists = $1 WHERE id = 1", [JSON.stringify(DEFAULT_ONBOARD_CHECKLISTS)]);
       console.log("Checklists de integração migrados para a ordem recomendada.");
+    } else if (atual.rows[0] && atual.rows[0].onboard_checklists && atual.rows[0].onboard_checklists[ETAPA_REMOVIDA]) {
+      await pool.query("UPDATE integration_settings SET onboard_checklists = $1 WHERE id = 1", [
+        JSON.stringify(reestruturaChecklists(atual.rows[0].onboard_checklists)),
+      ]);
+      console.log("Checklists de integração reestruturados (etapa 3 removida).");
     }
+  }
+
+  // Etapa "Aguardando Documentação" eliminada: renomeia as etapas em tudo que as guarda (idempotente).
+  {
+    const mapa = await pool.query("SELECT trello_list_map FROM integration_settings WHERE id = 1");
+    const lm = (mapa.rows[0] && mapa.rows[0].trello_list_map) || {};
+    if (Object.keys(lm).some((k) => ETAPA_RENOMEIA[k])) {
+      const novoMapa = {};
+      for (const [k, v] of Object.entries(lm)) if (k !== ETAPA_REMOVIDA) novoMapa[renomeiaEtapa(k)] = v;
+      await pool.query("UPDATE integration_settings SET trello_list_map = $1 WHERE id = 1", [JSON.stringify(novoMapa)]);
+    }
+    const { rows: todos } = await pool.query("SELECT id, data FROM clients");
+    let migrados = 0;
+    for (const r of todos) {
+      const n = { ...r.data };
+      let mudou = false;
+      if (n.onboardStage && ETAPA_RENOMEIA[n.onboardStage]) { n.onboardStage = ETAPA_RENOMEIA[n.onboardStage]; mudou = true; }
+      if (n.notasEtapas && typeof n.notasEtapas === "object" && Object.keys(n.notasEtapas).some((k) => ETAPA_RENOMEIA[k])) {
+        const nn = {};
+        for (const [k, v] of Object.entries(n.notasEtapas)) {
+          const alvo = k === ETAPA_REMOVIDA ? "2. Cadastro Administrativo" : renomeiaEtapa(k);
+          nn[alvo] = [...(nn[alvo] || []), ...(Array.isArray(v) ? v : [])];
+        }
+        n.notasEtapas = nn; mudou = true;
+      }
+      if (n.pedidoAutorizacaoAvanco && ETAPA_RENOMEIA[n.pedidoAutorizacaoAvanco.destino]) {
+        n.pedidoAutorizacaoAvanco = { ...n.pedidoAutorizacaoAvanco, destino: ETAPA_RENOMEIA[n.pedidoAutorizacaoAvanco.destino] }; mudou = true;
+      }
+      if (Array.isArray(n.checklistAutorizacoes) && n.checklistAutorizacoes.some((a) => a && ETAPA_RENOMEIA[a.destino])) {
+        n.checklistAutorizacoes = n.checklistAutorizacoes.map((a) => (a && ETAPA_RENOMEIA[a.destino] ? { ...a, destino: ETAPA_RENOMEIA[a.destino] } : a)); mudou = true;
+      }
+      if (mudou) {
+        await pool.query("UPDATE clients SET data = $1, updated_by = 'migração', updated_at = now() WHERE id = $2", [JSON.stringify(n), r.id]);
+        migrados++;
+      }
+    }
+    if (migrados) console.log(`Etapas renomeadas em ${migrados} cliente(s).`);
   }
 
   // Migração de continuidade: se existir o antigo app_state (versão anterior, sem login),
@@ -537,7 +636,7 @@ app.get("/api/clients", requireAuth, async (req, res) => {
 });
 
 // Versão do sistema. Precisa ser igual ao APP_BUILD do index.html; se mudar, telas abertas são avisadas.
-const APP_BUILD = "2026-10-07-sync1";
+const APP_BUILD = "2026-10-07-etapas2";
 app.get("/api/version", (req, res) => res.json({ build: APP_BUILD }));
 
 // Grava só o que mudou em cada cliente (campo a campo), em cima do que já está no banco.
@@ -586,7 +685,7 @@ app.put("/api/clients", requireAuth, requireRole("admin", "comercial"), async (r
 // Caminho restrito para o time operacional: só pode mexer na etapa de integração de um cliente,
 // nunca nos dados comerciais, valores ou cadastro.
 app.put("/api/clients/:id/onboard-stage", requireAuth, requireRole("admin", "comercial", "operacional"), async (req, res) => {
-  const { onboardStage } = req.body;
+  const onboardStage = renomeiaEtapa(req.body.onboardStage);
   const { rows } = await pool.query("SELECT data FROM clients WHERE id = $1", [req.params.id]);
   if (rows.length === 0) return res.status(404).json({ error: "Cliente não encontrado." });
   const updated = { ...rows[0].data, onboardStage };
