@@ -24,86 +24,175 @@ app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 app.use(express.static(__dirname));
 
+const { isDeepStrictEqual } = require("util");
+
 const ROLES = ["admin", "comercial", "operacional"];
 
-// Checklists padrão da Integração do Cliente -- trazidos 1:1 do board do Trello (cards reais,
+// Checklists padrão da Integração do Cliente -- trazidos do board do Trello (cards reais,
 // checklists "VALIDAÇÃO INICIAL", "ADMINISTRATIVO (Bruna)", "OPERAÇÃO – PARAMETRIZAÇÃO (Fiscal/DP)"
 // e "INTEGRAÇÃO"). Servem de seed na primeira vez que o servidor sobe; depois disso o admin pode
 // editar tudo pela tela "Checklists de integração" no CRM, sem precisar mexer em código.
-const DEFAULT_ONBOARD_CHECKLISTS = {
-  "1. Venda Ganha": {
-    titulo: "Validação inicial",
-    responsavel: "Comercial + Financeiro",
-    itens: [
-      { id: "vi-1", texto: "Serviços contratados confirmados" },
-      { id: "vi-2", texto: "Honorário confirmado" },
-      { id: "vi-3", texto: "Regime tributário validado" },
-      { id: "vi-4", texto: "Data oficial de início definida" },
-      { id: "vi-5", texto: "Responsável pela integração definido" },
-      { id: "vi-6", texto: "Cliente cadastrado no ContaAzul" },
-      { id: "vi-7", texto: "Contrato de prestação gerado no D4Sign" },
-      { id: "vi-8", texto: "Contrato enviado ao cliente" },
-      { id: "vi-9", texto: "Contrato assinado e salvo no Google Drive" },
-      { id: "vi-10", texto: "Boleto gerado conforme vencimento padrão" },
-      { id: "vi-11", texto: "Mensagem de aviso sobre o número do financeiro (64 8103-5520), forma de pagamento e envio do boleto" },
-    ],
-  },
-  "2. Cadastro Administrativo": {
-    titulo: "Administrativo",
-    responsavel: "Bruna · Implantação",
-    itens: [
-      { id: "ad-1", texto: "Empresa cadastrada no Domínio" },
-      { id: "ad-2", texto: "Procuração eletrônica ECAC (contador e escritório) solicitada ao cliente" },
-      { id: "ad-3", texto: "Pasta do cliente criada e organizada no Drive" },
-      { id: "ad-4", texto: "Procuração FGTS e Adesão do DET" },
-      { id: "ad-5", texto: "Cliente incluído nos agrupadores de tarefas" },
-      { id: "ad-6", texto: "Tarefas mensais vinculadas corretamente" },
-      { id: "ad-7", texto: "Classificação correta (Comércio / Serviço / Indústria)" },
-      { id: "ad-8", texto: "Procuração da prefeitura (WebISS etc.)" },
-      { id: "ad-9", texto: "Inclusão de contador no Redesim" },
-      { id: "ad-10", texto: "Confirmar se tem inscrição estadual" },
-      { id: "ad-11", texto: "Mensagem de boas-vindas enviada" },
-      { id: "ad-12", texto: "Solicitação de lista de documentos" },
-      { id: "ad-13", texto: "Documentos recebidos" },
-      { id: "ad-14", texto: "Documentos salvos na pasta do cliente no Google Drive" },
-      { id: "ad-15", texto: "Certificado digital salvo no Drive" },
-      { id: "ad-16", texto: "Adesão do DTE na Sefaz (se comércio)" },
-      { id: "ad-17", texto: "Habilitar emissão de nota fiscal na Sefaz (se comércio)" },
-    ],
-  },
-  "4. Operação – Parametrização": {
-    titulo: "Operação — Parametrização",
-    responsavel: "Fernanda · Fiscal / Daniela · DP",
-    itens: [
-      { id: "op-1", texto: "Regime configurado corretamente no sistema" },
-      { id: "op-2", texto: "CNAEs conferidos" },
-      { id: "op-3", texto: "Responsável técnico vinculado" },
-      { id: "op-4", texto: "Cliente incluído nos agrupadores de tarefas" },
-      { id: "op-5", texto: "Cadastro no SIEG realizado" },
-      { id: "op-6", texto: "Teste de captura de notas realizado" },
-      { id: "op-7", texto: "Cadastro no GOB realizado" },
-      { id: "op-8", texto: "Integrações testadas" },
-      { id: "op-9", texto: "Cadastro no sistema de folha (DP, se aplicável)" },
-      { id: "op-10", texto: "Parametrizações trabalhistas concluídas" },
-    ],
-  },
-  "5. Reunião e Portal": {
-    titulo: "Integração com o cliente",
-    responsavel: "Raphael",
-    itens: [
-      { id: "in-1", texto: "Reunião de integração realizada com o cliente" },
-      { id: "in-2", texto: "Apresentação da Canvas e responsabilidades das áreas" },
-      { id: "in-3", texto: "Alinhamento de prazos e rotina mensal" },
-      { id: "in-4", texto: "Acesso ao Portal do Cliente / Onvio enviado" },
-      { id: "in-5", texto: "Documentação organizada" },
-      { id: "in-6", texto: "Cliente orientado sobre envio de documentos" },
-      { id: "in-7", texto: "Confirmado que o cliente conseguiu acessar o portal" },
-      { id: "in-8", texto: "Primeira entrega validada internamente" },
-      { id: "in-9", texto: "Feedback inicial registrado" },
-      { id: "in-10", texto: "DCTFWeb de abertura (quando for abertura) — Bruna" },
-    ],
-  },
+//
+// REGRA DE ORDEM: nada que está à frente pode impedir uma tarefa anterior. Por isso cada item fica
+// na etapa em que ele realmente pode ser feito -- o que depende do cliente (documentos, certificado)
+// fica na etapa "Aguardando Documentação", e o que só existe depois da entrega (validação interna,
+// feedback) fica em "Primeira Entrega". Dentro da etapa, a ordem segue a dependência (ex.: classificar
+// a empresa antes de montar os agrupadores de tarefas).
+const ITEM_TEXTS = {
+  "vi-1": "Serviços contratados confirmados",
+  "vi-2": "Honorário confirmado",
+  "vi-3": "Regime tributário validado",
+  "vi-4": "Data oficial de início definida",
+  "vi-5": "Responsável pela integração definido",
+  "vi-6": "Cliente cadastrado no ContaAzul",
+  "vi-7": "Contrato de prestação gerado no D4Sign",
+  "vi-8": "Contrato enviado ao cliente",
+  "vi-9": "Contrato assinado e salvo no Google Drive",
+  "vi-10": "Boleto gerado conforme vencimento padrão",
+  "vi-11": "Mensagem de aviso sobre o número do financeiro (64 8103-5520), forma de pagamento e envio do boleto",
+  "ad-1": "Empresa cadastrada no Domínio",
+  "ad-2": "Procuração eletrônica ECAC (contador e escritório) solicitada ao cliente",
+  "ad-3": "Pasta do cliente criada e organizada no Drive",
+  "ad-4": "Procuração FGTS e Adesão do DET",
+  "ad-5": "Cliente incluído nos agrupadores de tarefas",
+  "ad-6": "Tarefas mensais vinculadas corretamente",
+  "ad-7": "Classificação correta (Comércio / Serviço / Indústria)",
+  "ad-8": "Procuração da prefeitura (WebISS etc.)",
+  "ad-9": "Inclusão de contador no Redesim",
+  "ad-10": "Confirmar se tem inscrição estadual",
+  "ad-11": "Mensagem de boas-vindas enviada",
+  "ad-12": "Solicitação de lista de documentos",
+  "ad-13": "Documentos recebidos",
+  "ad-14": "Documentos salvos na pasta do cliente no Google Drive",
+  "ad-15": "Certificado digital salvo no Drive",
+  "ad-16": "Adesão do DTE na Sefaz (se comércio)",
+  "ad-17": "Habilitar emissão de nota fiscal na Sefaz (se comércio)",
+  "op-1": "Regime configurado corretamente no sistema",
+  "op-2": "CNAEs conferidos",
+  "op-3": "Responsável técnico vinculado",
+  "op-4": "Cliente incluído nos agrupadores de tarefas",
+  "op-5": "Cadastro no SIEG realizado",
+  "op-6": "Teste de captura de notas realizado",
+  "op-7": "Cadastro no GOB realizado",
+  "op-8": "Integrações testadas",
+  "op-9": "Cadastro no sistema de folha (DP, se aplicável)",
+  "op-10": "Parametrizações trabalhistas concluídas",
+  "in-1": "Reunião de integração realizada com o cliente",
+  "in-2": "Apresentação da Canvas e responsabilidades das áreas",
+  "in-3": "Alinhamento de prazos e rotina mensal",
+  "in-4": "Acesso ao Portal do Cliente / Onvio enviado",
+  "in-5": "Documentação organizada",
+  "in-6": "Cliente orientado sobre envio de documentos",
+  "in-7": "Confirmado que o cliente conseguiu acessar o portal",
+  "in-8": "Primeira entrega validada internamente",
+  "in-9": "Feedback inicial registrado",
+  "in-10": "DCTFWeb de abertura (quando for abertura) — Bruna",
 };
+
+// Quem executa cada item (opcional, só pra aparecer como etiqueta na ficha). Editável na tela de checklists.
+const ITEM_RESP = {
+  ...Object.fromEntries(range17("ad").map((id) => [id, "Bruna"])),
+  ...Object.fromEntries(["op-1", "op-2", "op-3", "op-4", "op-5", "op-6", "op-7", "op-8"].map((id) => [id, "Fiscal"])),
+  "op-9": "DP",
+  "op-10": "DP",
+  "in-10": "Bruna",
+};
+function range17(prefix) {
+  return Array.from({ length: 17 }, (_, i) => `${prefix}-${i + 1}`);
+}
+
+function montaChecklists(spec, comResp = true) {
+  const out = {};
+  for (const [stage, { titulo, responsavel, ids }] of Object.entries(spec)) {
+    out[stage] = {
+      titulo,
+      responsavel,
+      itens: ids.map((id) => (comResp && ITEM_RESP[id] ? { id, texto: ITEM_TEXTS[id], resp: ITEM_RESP[id] } : { id, texto: ITEM_TEXTS[id] })),
+    };
+  }
+  return out;
+}
+
+const range = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}-${i + 1}`);
+
+// Ordem atual: TODO cadastro e TODA procuração ficam na primeira etapa, logo depois do fechamento
+// comercial. Documentos/certificado (que dependem do cliente) ficam em "Aguardando Documentação".
+const DEFAULT_ONBOARD_CHECKLISTS = montaChecklists({
+  "1. Venda Ganha": {
+    titulo: "Validação, cadastros e procurações",
+    responsavel: "Comercial + Financeiro · Bruna · Fiscal · DP",
+    ids: [
+      // validação do fechamento
+      "vi-1", "vi-2", "vi-3", "vi-4", "vi-5",
+      // cadastros que não dependem de nada além do fechamento
+      "vi-6", "ad-1", "ad-7", "ad-10", "ad-9",
+      // certificado digital: o SIEG precisa dele, então vem antes
+      "ad-15", "op-5",
+      // procurações; o GOB precisa da procuração, então vem depois
+      "ad-2", "ad-4", "ad-8", "op-7",
+      // folha e adesões na Sefaz (precisam de certificado, inscrição estadual e procuração)
+      "op-9", "ad-16", "ad-17",
+      // contrato e financeiro
+      "vi-7", "vi-8", "vi-9", "vi-10", "vi-11",
+    ],
+  },
+  "2. Cadastro Administrativo": { titulo: "Administrativo", responsavel: "Bruna · Implantação", ids: ["ad-3", "ad-5", "ad-6", "ad-11", "ad-12"] },
+  "3. Aguardando Documentação": { titulo: "Documentação do cliente", responsavel: "Bruna · Implantação (depende do cliente)", ids: ["ad-13", "ad-14"] },
+  "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
+  "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+  "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+});
+
+// Arranjos anteriores. Só servem pra reconhecer um banco que ainda está com um deles, sem nenhuma
+// edição, e migrá-lo sozinho pra ordem atual. Se alguém já editou, não mexemos.
+const LEGACY_ONBOARD_CHECKLISTS = [
+  // V1: importado 1:1 do Trello
+  montaChecklists({
+    "1. Venda Ganha": { titulo: "Validação inicial", responsavel: "Comercial + Financeiro", ids: range("vi", 11) },
+    "2. Cadastro Administrativo": { titulo: "Administrativo", responsavel: "Bruna · Implantação", ids: range("ad", 17) },
+    "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: range("op", 10) },
+    "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 10) },
+  }, false),
+  // V2: primeira reorganização por dependência
+  montaChecklists({
+    "1. Venda Ganha": { titulo: "Validação inicial", responsavel: "Comercial + Financeiro", ids: range("vi", 11) },
+    "2. Cadastro Administrativo": {
+      titulo: "Administrativo",
+      responsavel: "Bruna · Implantação",
+      ids: ["ad-1", "ad-7", "ad-10", "ad-3", "ad-5", "ad-6", "ad-9", "ad-11", "ad-12", "ad-2", "ad-4", "ad-8"],
+    },
+    "3. Aguardando Documentação": {
+      titulo: "Documentação e acessos do cliente",
+      responsavel: "Bruna · Implantação (depende do cliente)",
+      ids: ["ad-13", "ad-14", "ad-15", "ad-16", "ad-17"],
+    },
+    "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: range("op", 10) },
+    "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+    "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+  }, false),
+  // V3: cadastros e procurações na etapa 1 (certificado ainda na etapa 3)
+  montaChecklists({
+  "1. Venda Ganha": {
+    titulo: "Validação, cadastros e procurações",
+    responsavel: "Comercial + Financeiro · Bruna · Fiscal · DP",
+    ids: [
+      // validação do fechamento
+      "vi-1", "vi-2", "vi-3", "vi-4", "vi-5",
+      // cadastros (a classificação e a inscrição estadual vêm antes dos cadastros que dependem delas)
+      "vi-6", "ad-1", "ad-7", "ad-10", "ad-9", "op-5", "op-7", "op-9",
+      // procurações e adesões
+      "ad-2", "ad-4", "ad-8", "ad-16", "ad-17",
+      // contrato e financeiro
+      "vi-7", "vi-8", "vi-9", "vi-10", "vi-11",
+    ],
+  },
+  "2. Cadastro Administrativo": { titulo: "Administrativo", responsavel: "Bruna · Implantação", ids: ["ad-3", "ad-5", "ad-6", "ad-11", "ad-12"] },
+  "3. Aguardando Documentação": { titulo: "Documentação do cliente", responsavel: "Bruna · Implantação (depende do cliente)", ids: ["ad-13", "ad-14", "ad-15"] },
+  "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
+  "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+  "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+}, true),
+];
 
 async function initDb() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
@@ -197,6 +286,16 @@ async function initDb() {
     UPDATE integration_settings SET onboard_checklists = $1
     WHERE id = 1 AND (onboard_checklists IS NULL OR onboard_checklists = '{}'::jsonb)
   `, [JSON.stringify(DEFAULT_ONBOARD_CHECKLISTS)]);
+
+  // Se o banco ainda estiver exatamente com o modelo original (ninguém editou), troca pela ordem nova.
+  // Se alguém já editou algo, não mexe -- a tela de checklists oferece "Aplicar ordem recomendada".
+  {
+    const atual = await pool.query("SELECT onboard_checklists FROM integration_settings WHERE id = 1");
+    if (atual.rows[0] && LEGACY_ONBOARD_CHECKLISTS.some((v) => isDeepStrictEqual(atual.rows[0].onboard_checklists, v))) {
+      await pool.query("UPDATE integration_settings SET onboard_checklists = $1 WHERE id = 1", [JSON.stringify(DEFAULT_ONBOARD_CHECKLISTS)]);
+      console.log("Checklists de integração migrados para a ordem recomendada.");
+    }
+  }
 
   // Migração de continuidade: se existir o antigo app_state (versão anterior, sem login),
   // importa os dados de lá para as tabelas novas na primeira vez que o servidor novo sobe.
@@ -871,35 +970,55 @@ app.post("/api/trello/webhook", async (req, res) => {
 
 const GMAIL_USER = process.env.GMAIL_USER;
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
-const EMAIL_CONFIGURED = !!(GMAIL_USER && GMAIL_APP_PASSWORD);
 
-// Railway (e provedores de nuvem parecidos) costuma bloquear conexões SMTP de saída,
-// então tentamos a porta 465 (SSL direto) e, se travar, caímos pra porta 587 (STARTTLS)
-// -- uma das duas costuma ser liberada. Se nenhuma funcionar, o bloqueio é total e
-// precisamos trocar de estratégia (API HTTP de e-mail em vez de SMTP puro).
+// A Railway bloqueia conexão SMTP de saída (porta 465 e 587 travam sem nunca conectar),
+// então o jeito que funciona é mandar e-mail por HTTPS via Resend (resend.com) em vez de
+// falar direto com o Gmail. RESEND_FROM_EMAIL é o remetente, ex:
+//   "CRM Canvas Contabilidade <naoresponda@canvascontabilidade.com.br>"
+// (o domínio precisa estar verificado na conta Resend). Se essas variáveis não existirem,
+// caímos de volta pro Gmail por SMTP -- útil rodando fora da Railway (ex: na sua máquina).
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL;
+const RESEND_CONFIGURED = !!(RESEND_API_KEY && RESEND_FROM_EMAIL);
+const GMAIL_CONFIGURED = !!(GMAIL_USER && GMAIL_APP_PASSWORD);
+const EMAIL_CONFIGURED = RESEND_CONFIGURED || GMAIL_CONFIGURED;
+
 const SMTP_TIMEOUTS = { connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 12000 };
 
-const mailTransporter465 = EMAIL_CONFIGURED
+const mailTransporter465 = GMAIL_CONFIGURED
   ? nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }, family: 4, ...SMTP_TIMEOUTS })
   : null;
 
-const mailTransporter587 = EMAIL_CONFIGURED
+const mailTransporter587 = GMAIL_CONFIGURED
   ? nodemailer.createTransport({ host: "smtp.gmail.com", port: 587, secure: false, requireTLS: true, auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }, family: 4, ...SMTP_TIMEOUTS })
   : null;
 
-// Mantém o nome usado no resto do arquivo, mas com fallback automático de porta.
-const mailTransporter = EMAIL_CONFIGURED
-  ? {
-      sendMail: async (opts) => {
-        try {
-          return await mailTransporter465.sendMail(opts);
-        } catch (err465) {
-          console.error(`Falhou na porta 465 (${err465.message}), tentando porta 587...`);
-          return await mailTransporter587.sendMail(opts);
-        }
-      },
+// Função única de envio usada em todo o resto do arquivo: tenta Resend (HTTPS) primeiro;
+// se não estiver configurado, cai pro Gmail por SMTP (porta 465, depois 587).
+async function enviarEmail({ to, subject, html }) {
+  if (RESEND_CONFIGURED) {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: RESEND_FROM_EMAIL, to, subject, html }),
+    });
+    if (!resp.ok) {
+      const corpo = await resp.text().catch(() => "");
+      throw new Error(`Resend recusou o envio (HTTP ${resp.status}): ${corpo}`);
     }
-  : null;
+    return resp.json();
+  }
+  if (GMAIL_CONFIGURED) {
+    const from = `"CRM Canvas Contabilidade" <${GMAIL_USER}>`;
+    try {
+      return await mailTransporter465.sendMail({ from, to, subject, html });
+    } catch (err465) {
+      console.error(`Falhou na porta 465 (${err465.message}), tentando porta 587...`);
+      return await mailTransporter587.sendMail({ from, to, subject, html });
+    }
+  }
+  throw new Error("E-mail não configurado.");
+}
 
 function diasParado(dataISO) {
   if (!dataISO) return 0;
@@ -962,7 +1081,7 @@ function montarEmailHtml(nomeVendedor, itens) {
 }
 
 async function enviarDigestDiario() {
-  if (!EMAIL_CONFIGURED) return { sent: 0, reason: "E-mail não configurado (faltam GMAIL_USER/GMAIL_APP_PASSWORD)." };
+  if (!EMAIL_CONFIGURED) return { sent: 0, reason: "E-mail não configurado (faltam RESEND_API_KEY/RESEND_FROM_EMAIL ou GMAIL_USER/GMAIL_APP_PASSWORD)." };
   const porVendedor = await buscarNegociacoesPatadas(1);
   const vendedorIds = Object.keys(porVendedor);
   let sent = 0;
@@ -971,8 +1090,7 @@ async function enviarDigestDiario() {
     if (rows.length === 0) continue;
     const { name, email } = rows[0];
     try {
-      await mailTransporter.sendMail({
-        from: `"CRM Canvas Contabilidade" <${GMAIL_USER}>`,
+      await enviarEmail({
         to: email,
         subject: `Follow-up: ${porVendedor[vid].length} negociação(ões) parada(s)`,
         html: montarEmailHtml(name, porVendedor[vid]),
@@ -1008,10 +1126,23 @@ async function buscarStatusIntegracao() {
       const feitos = cfg.itens.filter((it) => prog[it.id] && prog[it.id].feito).length;
       checklistTxt = `${feitos}/${total}`;
     }
+    // Itens que ficaram pra trás em etapas anteriores (cliente avançou com autorização, por exemplo).
+    const numEtapa = parseInt(c.onboardStage, 10);
+    let pendAnteriores = 0;
+    for (const [nomeEtapa, cfgEtapa] of Object.entries(checklists)) {
+      if (!(parseInt(nomeEtapa, 10) < numEtapa) || !cfgEtapa || !Array.isArray(cfgEtapa.itens)) continue;
+      pendAnteriores += cfgEtapa.itens.filter((it) => !(prog[it.id] && prog[it.id].feito)).length;
+    }
     return {
       razaoSocial: c.razaoSocial || "Sem nome",
       etapa: c.onboardStage,
       checklist: checklistTxt,
+      pendAnteriores,
+      ultimaNota: (() => {
+        const notas = (c.notasEtapas && c.notasEtapas[c.onboardStage]) || [];
+        const n = notas[notas.length - 1];
+        return n ? `${n.texto}${n.por ? ` — ${n.por}` : ""}` : "";
+      })(),
       dias: diasParado(c.onboardStageUpdatedAt || c.dataVenda),
       pendenteAutorizacao: !!c.pedidoAutorizacaoAvanco,
     };
@@ -1028,9 +1159,10 @@ function montarEmailIntegracaoHtml(itens) {
         <tr>
           <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;">${i.razaoSocial}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;">${i.etapa}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;text-align:center;font-family:monospace;">${i.checklist}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;text-align:center;font-family:monospace;">${i.checklist}${i.pendAnteriores ? `<div style="color:#A8483E;font-size:11px;font-weight:700;">+${i.pendAnteriores} pend. de etapa anterior</div>` : ""}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;text-align:right;color:${i.dias >= 5 ? "#A8483E" : i.dias >= 2 ? "#8A6524" : "#5A5548"};font-weight:${i.dias >= 2 ? 700 : 400};">${i.dias} dia${i.dias === 1 ? "" : "s"}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;${i.pendenteAutorizacao ? "color:#A8483E;font-weight:700;" : "color:#B0AA98;"}">${i.pendenteAutorizacao ? "⏳ aguardando autorização" : "—"}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E4DFD1;color:#5A5548;font-size:12px;">${i.ultimaNota ? String(i.ultimaNota).replace(/</g, "&lt;").slice(0, 160) : "—"}</td>
         </tr>`
     )
     .join("");
@@ -1047,9 +1179,10 @@ function montarEmailIntegracaoHtml(itens) {
             <th style="padding:8px 12px;text-align:center;">Checklist</th>
             <th style="padding:8px 12px;text-align:right;">Dias parado na etapa</th>
             <th style="padding:8px 12px;text-align:left;">Situação</th>
+            <th style="padding:8px 12px;text-align:left;">Última nota da etapa</th>
           </tr>
         </thead>
-        <tbody>${linhas || `<tr><td colspan="5" style="padding:14px;color:#8B8577;">Nenhum cliente em integração no momento.</td></tr>`}</tbody>
+        <tbody>${linhas || `<tr><td colspan="6" style="padding:14px;color:#8B8577;">Nenhum cliente em integração no momento.</td></tr>`}</tbody>
       </table>
       <p style="color:#8B8577;font-size:12px;margin-top:20px;">Mensagem automática do CRM Canvas Contabilidade.</p>
     </div>
@@ -1065,7 +1198,7 @@ const INTEGRATION_DIGEST_RECIPIENTS = (process.env.INTEGRATION_DIGEST_RECIPIENTS
   .filter(Boolean);
 
 async function enviarDigestIntegracao() {
-  if (!EMAIL_CONFIGURED) return { sent: 0, reason: "E-mail não configurado (faltam GMAIL_USER/GMAIL_APP_PASSWORD)." };
+  if (!EMAIL_CONFIGURED) return { sent: 0, reason: "E-mail não configurado (faltam RESEND_API_KEY/RESEND_FROM_EMAIL ou GMAIL_USER/GMAIL_APP_PASSWORD)." };
   const itens = await buscarStatusIntegracao();
   const html = montarEmailIntegracaoHtml(itens);
   let destinatarios;
@@ -1077,8 +1210,7 @@ async function enviarDigestIntegracao() {
   }
   const resultados = await Promise.allSettled(
     destinatarios.map(({ email }) =>
-      mailTransporter.sendMail({
-        from: `"CRM Canvas Contabilidade" <${GMAIL_USER}>`,
+      enviarEmail({
         to: email,
         subject: `Integração: ${itens.length} cliente(s) em andamento`,
         html,
@@ -1108,9 +1240,9 @@ app.post("/api/reports/send-integration-digest", requireAuth, requireRole("admin
   } catch (err) {
     console.error(err);
     if (err.message === "timeout") {
-      return res.status(504).json({ error: "O envio demorou demais e foi cancelado. Verifique se GMAIL_USER/GMAIL_APP_PASSWORD estão corretos e tente de novo." });
+      return res.status(504).json({ error: "O envio demorou demais e foi cancelado. Verifique as variáveis de e-mail (RESEND_API_KEY/RESEND_FROM_EMAIL ou GMAIL_USER/GMAIL_APP_PASSWORD) e tente de novo." });
     }
-    res.status(500).json({ error: "Não foi possível enviar os e-mails." });
+    res.status(500).json({ error: `Não foi possível enviar os e-mails: ${err.message}` });
   }
 });
 
@@ -1155,13 +1287,17 @@ app.get("/api/reports/stale-negotiations", requireAuth, async (req, res) => {
 
 app.post("/api/reports/send-stale-digest", requireAuth, requireRole("admin"), async (req, res) => {
   try {
-    const result = await enviarDigestDiario();
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000));
+    const result = await Promise.race([enviarDigestDiario(), timeout]);
     if (result.reason) return res.status(409).json({ error: result.reason });
     await pool.query("UPDATE integration_settings SET last_stale_digest_sent_date = CURRENT_DATE WHERE id = 1");
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Não foi possível enviar os e-mails." });
+    if (err.message === "timeout") {
+      return res.status(504).json({ error: "O envio demorou demais e foi cancelado. Verifique as variáveis de e-mail e tente de novo." });
+    }
+    res.status(500).json({ error: `Não foi possível enviar os e-mails: ${err.message}` });
   }
 });
 
@@ -1199,6 +1335,10 @@ app.put("/api/origens-lead", requireAuth, requireRole("admin", "comercial"), asy
 
 // Checklists de integração -- qualquer pessoa logada pode ler (precisa pra marcar os itens),
 // só admin e comercial podem editar o texto/estrutura dos checklists.
+app.get("/api/onboard-checklists/recomendado", requireAuth, (req, res) => {
+  res.json({ checklists: DEFAULT_ONBOARD_CHECKLISTS });
+});
+
 app.get("/api/onboard-checklists", requireAuth, async (req, res) => {
   const { rows } = await pool.query("SELECT onboard_checklists FROM integration_settings WHERE id = 1");
   res.json({ checklists: (rows[0] && rows[0].onboard_checklists) || {} });
