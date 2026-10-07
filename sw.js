@@ -1,7 +1,7 @@
 // Service worker simples: deixa o "casco" do app (o próprio index.html) disponível
 // mesmo sem internet, pra abrir instantâneo. Os dados (API) sempre buscam da rede --
 // isso aqui só evita a tela branca quando o sinal cai.
-const CACHE_NAME = "canvas-crm-shell-v1";
+const CACHE_NAME = "canvas-crm-shell-v2";
 const SHELL_FILES = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {

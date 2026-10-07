@@ -22,7 +22,15 @@ const pool = new Pool({
 
 app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
-app.use(express.static(__dirname));
+// HTML e service worker nunca ficam em cache do navegador -- assim, depois de um deploy, o primeiro
+// recarregamento já traz a versão nova (antes, às vezes ficava a tela antiga aparecendo).
+app.use(
+  express.static(__dirname, {
+    setHeaders: (res, filePath) => {
+      if (/\.html$|sw\.js$/.test(filePath)) res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    },
+  })
+);
 
 const { isDeepStrictEqual } = require("util");
 
@@ -118,26 +126,21 @@ const range = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}-${i 
 // Ordem atual: TODO cadastro e TODA procuração ficam na primeira etapa, logo depois do fechamento
 // comercial. Documentos/certificado (que dependem do cliente) ficam em "Aguardando Documentação".
 const DEFAULT_ONBOARD_CHECKLISTS = montaChecklists({
-  "1. Venda Ganha": {
-    titulo: "Validação, cadastros e procurações",
-    responsavel: "Comercial + Financeiro · Bruna · Fiscal · DP",
-    ids: [
-      // validação do fechamento
-      "vi-1", "vi-2", "vi-3", "vi-4", "vi-5",
-      // cadastros que não dependem de nada além do fechamento
-      "vi-6", "ad-1", "ad-7", "ad-10", "ad-9",
-      // certificado digital: o SIEG precisa dele, então vem antes
-      "ad-15", "op-5",
-      // procurações; o GOB precisa da procuração, então vem depois
-      "ad-2", "ad-4", "ad-8", "op-7",
-      // folha e adesões na Sefaz (precisam de certificado, inscrição estadual e procuração)
-      "op-9", "ad-16", "ad-17",
-      // contrato e financeiro
-      "vi-7", "vi-8", "vi-9", "vi-10", "vi-11",
-    ],
+  // Etapa 1: só o que o COMERCIAL (e o financeiro) faz logo depois do fechamento.
+  "1. Venda Ganha": { titulo: "Validação inicial", responsavel: "Comercial + Financeiro", ids: range("vi", 11) },
+  // Etapa 2: todo cadastro e toda procuração (a ordem segue a dependência: o certificado vem antes do
+  // SIEG, e o GOB vem depois das procurações).
+  "2. Cadastro Administrativo": {
+    titulo: "Cadastros e procurações",
+    responsavel: "Bruna · Fiscal · DP",
+    ids: ["ad-1", "ad-7", "ad-10", "ad-9", "ad-15", "op-5", "ad-2", "ad-4", "ad-8", "op-7", "op-9", "ad-16", "ad-17"],
   },
-  "2. Cadastro Administrativo": { titulo: "Administrativo", responsavel: "Bruna · Implantação", ids: ["ad-3", "ad-5", "ad-6", "ad-11", "ad-12"] },
-  "3. Aguardando Documentação": { titulo: "Documentação do cliente", responsavel: "Bruna · Implantação (depende do cliente)", ids: ["ad-13", "ad-14"] },
+  // Etapa 3: boas-vindas, pedido e recebimento dos documentos (a pasta do Drive vem antes de guardar neles).
+  "3. Aguardando Documentação": {
+    titulo: "Implantação e documentação do cliente",
+    responsavel: "Bruna · Implantação (depende do cliente)",
+    ids: ["ad-11", "ad-12", "ad-3", "ad-5", "ad-6", "ad-13", "ad-14"],
+  },
   "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
   "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
   "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
@@ -188,6 +191,32 @@ const LEGACY_ONBOARD_CHECKLISTS = [
   },
   "2. Cadastro Administrativo": { titulo: "Administrativo", responsavel: "Bruna · Implantação", ids: ["ad-3", "ad-5", "ad-6", "ad-11", "ad-12"] },
   "3. Aguardando Documentação": { titulo: "Documentação do cliente", responsavel: "Bruna · Implantação (depende do cliente)", ids: ["ad-13", "ad-14", "ad-15"] },
+  "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
+  "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
+  "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
+}, true),
+  // V4: cadastros e procurações na etapa 1
+  montaChecklists({
+  "1. Venda Ganha": {
+    titulo: "Validação, cadastros e procurações",
+    responsavel: "Comercial + Financeiro · Bruna · Fiscal · DP",
+    ids: [
+      // validação do fechamento
+      "vi-1", "vi-2", "vi-3", "vi-4", "vi-5",
+      // cadastros que não dependem de nada além do fechamento
+      "vi-6", "ad-1", "ad-7", "ad-10", "ad-9",
+      // certificado digital: o SIEG precisa dele, então vem antes
+      "ad-15", "op-5",
+      // procurações; o GOB precisa da procuração, então vem depois
+      "ad-2", "ad-4", "ad-8", "op-7",
+      // folha e adesões na Sefaz (precisam de certificado, inscrição estadual e procuração)
+      "op-9", "ad-16", "ad-17",
+      // contrato e financeiro
+      "vi-7", "vi-8", "vi-9", "vi-10", "vi-11",
+    ],
+  },
+  "2. Cadastro Administrativo": { titulo: "Administrativo", responsavel: "Bruna · Implantação", ids: ["ad-3", "ad-5", "ad-6", "ad-11", "ad-12"] },
+  "3. Aguardando Documentação": { titulo: "Documentação do cliente", responsavel: "Bruna · Implantação (depende do cliente)", ids: ["ad-13", "ad-14"] },
   "4. Operação – Parametrização": { titulo: "Operação — Parametrização", responsavel: "Fernanda · Fiscal / Daniela · DP", ids: ["op-1", "op-2", "op-3", "op-4", "op-6", "op-8", "op-10"] },
   "5. Reunião e Portal": { titulo: "Integração com o cliente", responsavel: "Raphael", ids: range("in", 7) },
   "6. Primeira Entrega": { titulo: "Primeira entrega", responsavel: "Raphael · Fiscal / Bruna", ids: ["in-10", "in-8", "in-9"] },
