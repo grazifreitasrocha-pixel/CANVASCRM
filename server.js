@@ -331,6 +331,14 @@ async function initDb() {
     );
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS goals (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      data JSONB NOT NULL DEFAULT '{}',
+      updated_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS pricing_config (
       id INTEGER PRIMARY KEY DEFAULT 1,
       data JSONB NOT NULL DEFAULT '{}',
@@ -635,8 +643,13 @@ app.get("/api/clients", requireAuth, async (req, res) => {
   res.json({ clients: rows.map((r) => r.data) });
 });
 
+// Registro (com data) de cada mudança de etapa da integração -- base dos tempos médios por etapa.
+function registroIntegracao(etapa, por) {
+  return { id: "hi-s-" + Date.now() + "-" + Math.floor(Math.random() * 1000), em: new Date().toISOString(), etapa, por: por || "" };
+}
+
 // Versão do sistema. Precisa ser igual ao APP_BUILD do index.html; se mudar, telas abertas são avisadas.
-const APP_BUILD = "2026-10-07-etapas2";
+const APP_BUILD = "2026-10-16-funil2";
 app.get("/api/version", (req, res) => res.json({ build: APP_BUILD }));
 
 // Grava só o que mudou em cada cliente (campo a campo), em cima do que já está no banco.
@@ -664,6 +677,16 @@ app.put("/api/clients", requireAuth, requireRole("admin", "comercial"), async (r
       }
       const merged = { ...cur.rows[0].data, ...(p.full || p.set || {}) };
       (p.unset || []).forEach((k) => delete merged[k]);
+      // Histórico de etapas só cresce: junta o que já está no banco com o que chegou (ninguém apaga o registro do outro).
+      for (const chave of ["historicoEtapas", "historicoIntegracao"]) {
+        if (Array.isArray(cur.rows[0].data[chave]) && Array.isArray(merged[chave])) {
+          const porId = new Map();
+          [...cur.rows[0].data[chave], ...merged[chave]].forEach((h) => {
+            if (h && h.id) porId.set(h.id, h);
+          });
+          merged[chave] = [...porId.values()].sort((a, b) => String(a.em).localeCompare(String(b.em)));
+        }
+      }
       merged.id = p.id;
       await client.query("UPDATE clients SET data = $1, updated_by = $2, updated_at = now() WHERE id = $3", [
         JSON.stringify(merged),
@@ -689,6 +712,7 @@ app.put("/api/clients/:id/onboard-stage", requireAuth, requireRole("admin", "com
   const { rows } = await pool.query("SELECT data FROM clients WHERE id = $1", [req.params.id]);
   if (rows.length === 0) return res.status(404).json({ error: "Cliente não encontrado." });
   const updated = { ...rows[0].data, onboardStage };
+  if (rows[0].data.onboardStage !== onboardStage) updated.historicoIntegracao = [...(rows[0].data.historicoIntegracao || []), registroIntegracao(onboardStage, req.user.name || req.user.email)];
   await pool.query("UPDATE clients SET data = $1, updated_by = $2, updated_at = now() WHERE id = $3", [
     JSON.stringify(updated),
     req.user.email,
@@ -699,6 +723,26 @@ app.put("/api/clients/:id/onboard-stage", requireAuth, requireRole("admin", "com
 
 app.delete("/api/clients/:id", requireAuth, requireRole("admin"), async (req, res) => {
   await pool.query("DELETE FROM clients WHERE id = $1", [req.params.id]);
+  res.json({ ok: true });
+});
+
+// ---- Metas (financeiras, contatos, reuniões...) por mês -- admin e comercial veem, só admin edita ----
+
+app.get("/api/goals", requireAuth, requireRole("admin", "comercial"), async (req, res) => {
+  const { rows } = await pool.query("SELECT data FROM goals WHERE id = 1");
+  res.json({ goals: rows[0] ? rows[0].data : {} });
+});
+
+app.put("/api/goals/:mes", requireAuth, requireRole("admin"), async (req, res) => {
+  const mes = req.params.mes;
+  if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ error: "Mês inválido." });
+  const dados = req.body && req.body.data;
+  if (!dados || typeof dados !== "object") return res.status(400).json({ error: "Formato inválido." });
+  await pool.query(
+    `INSERT INTO goals (id, data, updated_by, updated_at) VALUES (1, jsonb_build_object($1::text, $2::jsonb), $3, now())
+     ON CONFLICT (id) DO UPDATE SET data = goals.data || jsonb_build_object($1::text, $2::jsonb), updated_by = $3, updated_at = now()`,
+    [mes, JSON.stringify(dados), req.user.email]
+  );
   res.json({ ok: true });
 });
 
@@ -1116,6 +1160,7 @@ app.post("/api/trello/webhook", async (req, res) => {
       if (clientRows.length === 0) return;
       const client = clientRows[0];
       const updated = { ...client.data, onboardStage: novaEtapa };
+      if (client.data.onboardStage !== novaEtapa) updated.historicoIntegracao = [...(client.data.historicoIntegracao || []), registroIntegracao(novaEtapa, "Trello")];
       await pool.query("UPDATE clients SET data = $1, updated_by = 'trello', updated_at = now() WHERE id = $2", [
         JSON.stringify(updated),
         client.id,
